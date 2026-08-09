@@ -3,8 +3,9 @@ analyzer.py — Sentiment analysis, opinion generation, and region detection.
 
 Objectives:
     Process unanalyzed articles through three steps:
-    1. Sentiment classification (positive/negative/neutral) using pysentimiento,
-       a Spanish-language BERT-based model.
+    1. Sentiment classification (positive/negative/neutral) using either:
+       - "local" backend: pysentimiento, a Spanish-language BERT-based model.
+       - "api" backend: Qwen API (DashScope) for richer analysis.
     2. Region detection — identifies which Mexican state or macro-region the
        article is about, using keyword matching against state names and
        regional patterns (norte, bajío, occidente, sureste, centro, golfo, pacífico).
@@ -17,21 +18,28 @@ How it's used:
     results back (sentiment, affected_region, opinion, analyzed=True).
     Uses full_text when available, falls back to summary or title.
 
+    Backend selection: set NONEWS_SENTIMENT_BACKEND env var to "local" (default)
+    or "api". For API mode, also set NONEWS_SENTIMENT_API_KEY.
+
 Connections:
+    - config.py provides SENTIMENT_BACKEND, SENTIMENT_API_KEY, SENTIMENT_API_URL,
+      SENTIMENT_API_MODEL settings.
     - models.py defines the Article table (reads text fields, writes analysis fields).
     - database.py provides get_session() for DB access.
     - fetcher.py and scraper.py create the content this module analyzes.
     - cli.py calls analyze_pending() from the `analyze` command.
     - cli.py stats command displays sentiment and region breakdowns.
-    - Requires pysentimiento (pip install pysentimiento) — downloads a ~400MB
-      Spanish sentiment model on first use.
+    - Local mode requires pysentimiento (pip install pysentimiento).
+    - API mode requires a DashScope API key (set NONEWS_SENTIMENT_API_KEY).
 """
 
 import logging
 import re
 
+import requests
 from sqlalchemy import select
 
+from nonews import config
 from nonews.database import get_session
 from nonews.models import Article
 
@@ -105,6 +113,7 @@ REGION_PATTERNS = {
 
 
 def _get_sentiment_analyzer():
+    """Lazy-load the local pysentimiento model."""
     global _sentiment_analyzer
     if _sentiment_analyzer is None:
         from pysentimiento import create_analyzer
@@ -112,7 +121,8 @@ def _get_sentiment_analyzer():
     return _sentiment_analyzer
 
 
-def _classify_sentiment(text: str) -> str:
+def _classify_sentiment_local(text: str) -> str:
+    """Classify sentiment using the local pysentimiento BERT model."""
     analyzer = _get_sentiment_analyzer()
     result = analyzer.predict(text[:500])
     mapping = {
@@ -121,6 +131,54 @@ def _classify_sentiment(text: str) -> str:
         "NEU": "neutral",
     }
     return mapping.get(result.output, "neutral")
+
+
+def _classify_sentiment_api(text: str) -> str:
+    """Classify sentiment using an OpenAI-compatible API (Qwen, GPT, etc.)."""
+    if not config.SENTIMENT_API_KEY:
+        logger.warning("SENTIMENT_API_KEY not set, falling back to local")
+        return _classify_sentiment_local(text)
+
+    prompt = (
+        "Clasifica el sentimiento de esta noticia mexicana en una sola palabra: "
+        "'positive', 'negative', o 'neutral'. Responde solo con la palabra.\n\n"
+        f"Noticia: {text[:500]}"
+    )
+
+    try:
+        resp = requests.post(
+            config.SENTIMENT_API_URL,
+            headers={
+                "Authorization": f"Bearer {config.SENTIMENT_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": config.SENTIMENT_API_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+                "max_tokens": 10,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        result = resp.json()["choices"][0]["message"]["content"].strip().lower()
+
+        if "positive" in result or "positivo" in result:
+            return "positive"
+        elif "negative" in result or "negativo" in result:
+            return "negative"
+        else:
+            return "neutral"
+    except Exception as e:
+        logger.error(f"API sentiment analysis failed: {e}, falling back to local")
+        return _classify_sentiment_local(text)
+
+
+def _classify_sentiment(text: str) -> str:
+    """Classify sentiment using the configured backend."""
+    if config.SENTIMENT_BACKEND == "api":
+        return _classify_sentiment_api(text)
+    return _classify_sentiment_local(text)
 
 
 def _detect_region(text: str) -> str:

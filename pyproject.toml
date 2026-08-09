@@ -13,6 +13,9 @@ dependencies = [
     "pysentimiento>=0.7",
 ]
 
+[project.optional-dependencies]
+api = ["openai>=1.0"]
+
 [project.scripts]
 nonews = "nonews.cli:cli"
 

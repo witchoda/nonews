@@ -48,3 +48,15 @@ CATEGORIES = [
 SCRAPER_DELAY_SECONDS = 2.0
 DORMANT_RETRY_DAYS = 14
 DORMANT_MAX_RETRIES = 3
+
+# Sentiment analysis backend: "local" (pysentimiento) or "api" (Qwen)
+SENTIMENT_BACKEND = os.environ.get("NONEWS_SENTIMENT_BACKEND", "local")
+
+# Qwen API settings (only needed if SENTIMENT_BACKEND is "api")
+# Uses DashScope (Alibaba Cloud) OpenAI-compatible endpoint
+SENTIMENT_API_KEY = os.environ.get("NONEWS_SENTIMENT_API_KEY", "")
+SENTIMENT_API_URL = os.environ.get(
+    "NONEWS_SENTIMENT_API_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+)
+SENTIMENT_API_MODEL = os.environ.get("NONEWS_SENTIMENT_API_MODEL", "qwen-plus")

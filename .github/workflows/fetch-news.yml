@@ -1,0 +1,46 @@
+name: Fetch and analyze Mexican news
+
+on:
+  schedule:
+    # Run every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  fetch-news:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Cache HuggingFace model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-model-${{ runner.os }}-v1
+      
+      - name: Install dependencies
+        run: pip install -e .
+      
+      - name: Fetch articles from RSS sources
+        run: python -m nonews fetch
+      
+      - name: Analyze articles (sentiment, region, opinion)
+        run: python -m nonews analyze
+      
+      - name: Generate HTML report
+        run: python -m nonews report
+      
+      - name: Commit updated data and report
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add data/nonews.db data/report.html
+          git diff --staged --quiet || git commit -m "Update news data and report [skip ci]"
+          git push
